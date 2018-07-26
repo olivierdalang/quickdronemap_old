@@ -1,8 +1,18 @@
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import QAction
 
+try:
+    import PIL
+except ModuleNotFoundError:
+    print("PIL not installed. Trying to auto-install using pip...")
+    import pip
+    pip.main(['install','pillow'])
+    import PIL
+    print("Done !")
+
 from .resources import *
 from .quick_drone_map_dialog import QuickDroneMapDialog
+from .qdm import DroneMap
 
 class QuickDroneMap:
     """QGIS Plugin Implementation."""
@@ -45,4 +55,7 @@ class QuickDroneMap:
         result = self.dlg.exec_()
         
         if result:
-            pass
+            drone_map = DroneMap(self.iface, self.dlg.pathLineEdit.text())
+            drone_map.process()
+            drone_map.load_worldfiles()
+            # drone_map.load_vrts()

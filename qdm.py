@@ -1,4 +1,4 @@
-import math, os, datetime
+import math, os, datetime, tempfile, json
 
 from PIL import Image as PILImage
 from PIL import ExifTags as PILExifTags
@@ -108,6 +108,23 @@ class DroneMap():
         print("8/ Computing all transforms...")
         for image in self.images:
             image.update_transform()
+
+        print("9/ Creating debug jsons files")
+        img_data = {"type": "FeatureCollection","features": []}
+        for image in self.images:
+            coords = [image.lon, image.lat]
+            props = {k:str(v) for (k,v) in vars(image).items()}
+            feature = {"type": "Feature","properties": props,"geometry": {"type": "Point","coordinates": coords}}
+            img_data['features'].append(feature)
+        
+        img_file = tempfile.NamedTemporaryFile(mode='w+', suffix='.geojson', delete=False)
+        json.dump(img_data, img_file)
+        img_file.close()
+        layer = self.iface.addVectorLayer(img_file.name,"[DEBUG] Geolocated images","ogr")
+        layer.loadNamedStyle(os.path.join(os.path.dirname(os.path.realpath(__file__)),'debug_geolocated_style.qml'))
+        layer.setCrs(self.crs_src)
+        
+
 
     def load_worldfiles(self):
         for image in self.images:

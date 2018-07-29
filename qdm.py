@@ -17,9 +17,11 @@ ANGLE_THRESHOLD = 15.0 / 180.0 * math.pi # 15°
 # Threshold over which images are not considered being in the same sequence (in seconds)
 TIME_THRESHOLD = 20
 # Offset to images loaded
-LOAD_LIMIT_OFFSET = 70
+LOAD_LIMIT_OFFSET = 75
 # Count of images loaded (None or 0 for no limit)
-LOAD_LIMIT_COUNT = 15
+LOAD_LIMIT_COUNT = 8
+# Similarity will be computed on downscaled images. The lower the factor, the fastest the process
+DOWNSCALING_FACTOR = 0.05
 
 
 class DroneMap():
@@ -28,6 +30,22 @@ class DroneMap():
         self.iface = iface
         self.folder = folder
         self.images = []
+        
+        self.crs_src = QgsCoordinateReferenceSystem(4326)
+        self.crs_dest = None
+        self.xform = None
+
+    def reproject(self, lon, lat):
+        """
+        This returns a reprojected point, and determines the map's CRS automatically if not set using UTM grid applicable to the first image's lat lon
+        """
+        if self.xform is None:
+            # if the CRS hasn't been determined yet, we set it from the first image's lat/lon (take the UTM crs)
+            utm_i = str(int(math.floor((self.images[0].lon + 180) / 6 ) % 60) + 1).zfill(2)
+            epsg_code = int('326' + utm_i) if (self.images[0].lat >= 0) else int('327' + utm_i)
+            self.crs_dest = QgsCoordinateReferenceSystem(epsg_code)
+            self.xform = QgsCoordinateTransform(self.crs_src, self.crs_dest, QgsProject.instance())
+        return self.xform.transform(QgsPointXY(lon, lat))
 
     def process(self):
         """
@@ -49,17 +67,6 @@ class DroneMap():
         for image in self.images:
             image.set_attributes()
 
-        print("3/ Getting coordinate system...")
-        utm_i = str(int(math.floor((self.images[0].lon + 180) / 6 ) % 60) + 1).zfill(2)
-        epsg_code = int('326' + utm_i) if (self.images[0].lat >= 0) else int('327' + utm_i)
-        self.crs_src = QgsCoordinateReferenceSystem(4326)
-        self.crs_dest = QgsCoordinateReferenceSystem(epsg_code)
-        self.xform = QgsCoordinateTransform(self.crs_src, self.crs_dest, QgsProject.instance())
-
-        print("4/ Reprojecting...")
-        for image in self.images:
-            image.reproject()
-
         print("5/ Building image sequences...")
         self.images.sort(key=lambda x: x.timestamp)
         for i in range(len(self.images)):
@@ -67,8 +74,6 @@ class DroneMap():
             prev_image = self.images[i-1] if i>0 else None
             image = self.images[i]
             next_image = self.images[i+1] if i<len(self.images)-1 else None
-
-            print("Building sequences... Doing image {}".format(image.name()))
 
             if prev_image is None or next_image is None:
                 continue
@@ -93,17 +98,74 @@ class DroneMap():
             next_image.prev_image = image
 
 
-        print("6/ Deriving orientation from image sequence")
+        print("6/ Deriving orientation from image  [DISABLED]")
         for image in self.images:
+            # if the direction wasn't set in the Exif tags, we derive it from the image sequences
             if image.direction is None:
                 img_a = image.prev_image or image 
                 img_b = image.next_image or image 
 
-                image.direction = math.atan2(img_b.point.x()-img_a.point.x(),-img_b.point.y()+img_a.point.y())
+                # TODO : reenable this once transformation is sorted out
+                # image.direction = math.atan2(img_b.point.x()-img_a.point.x(),-img_b.point.y()+img_a.point.y())
+                image.direction = 0
 
 
         print("7/ Building image neighbourhood graph...")
         # TODO
+
+        print("8/ Adjusting all positions PROTOTYPE")        
+        from .utils import resized
+        import scipy as sp
+        import scipy.misc
+        import imreg_dft as ird
+
+        def add_qgs_points(self, other):
+            return QgsPointXY(self.x()+other.x(),self.y()+other.y())
+        QgsPointXY.__add__ = add_qgs_points
+        def sub_qgs_points(self, other):
+            return QgsPointXY(self.x()-other.x(),self.y()-other.y())
+        QgsPointXY.__sub__ = sub_qgs_points
+        def mul_qgs_points(self, other):
+            return QgsPointXY(self.x()*other,self.y()*other)
+        QgsPointXY.__mul__ = mul_qgs_points
+
+        for i in range(0,len(self.images),2):
+
+            src = self.images[i]
+            mvg = self.images[i+1]
+
+            print("Doing image {}".format(src))
+
+            src_img_path = resized(src.path, factor=DOWNSCALING_FACTOR)
+            mvg_img_path = resized(mvg.path, factor=DOWNSCALING_FACTOR)
+
+            src_data = sp.misc.imread(src_img_path, True)
+            mvg_data = sp.misc.imread(mvg_img_path, True)        
+            result = ird.similarity(src_data, mvg_data)
+
+            delta = mvg.point-src.point
+
+            print("success : {}".format(result['success']))
+
+            # 'tvec': array([ 165.02376996,  -24.12990078])
+            # 'success': 0.057037194001802044
+            # 'angle': -0.19939725860962199
+            # 'scale': 0.99936381315221923
+            # 'Dscale': 0.0017803982088722529
+            # 'Dangle': 0.05625
+            # 'Dt': 0.25,
+
+            mvg.d_direction = result['angle'] / 180.0 * math.pi
+            mvg.f_pixel_size = result['scale']
+
+            print("TVEC is {}".format(result['tvec']))
+
+            translation_vector = QgsPointXY(result['tvec'][1], -result['tvec'][0])
+            translation_vector *= mvg.pixel_size*mvg.f_pixel_size/DOWNSCALING_FACTOR
+            mvg.d_point = src.point + translation_vector - mvg.point
+
+
+
         
         print("8/ Computing all transforms...")
         for image in self.images:
@@ -123,8 +185,6 @@ class DroneMap():
         layer = self.iface.addVectorLayer(img_file.name,"[DEBUG] Geolocated images","ogr")
         layer.loadNamedStyle(os.path.join(os.path.dirname(os.path.realpath(__file__)),'debug_geolocated_style.qml'))
         layer.setCrs(self.crs_src)
-        
-
 
     def load_worldfiles(self):
         for image in self.images:
@@ -142,6 +202,12 @@ class Image():
     def __init__(self, drone_map, path):
         self.drone_map = drone_map
         self.path = path
+        self.width = None
+        self.height = None
+        self.focal = None
+        self.timestamp = None
+        self.lat = None
+        self.lon = None
 
         # neighbouring attributes
         self.prev_image = None
@@ -149,24 +215,14 @@ class Image():
         self.neighbours_images = []
 
         # image/tags attributes
-        self.width = None
-        self.height = None
-        self.lat = None 
-        self.lon = None 
+        self.point = None
         self.altitude = None
         self.direction = None
-        self.focal = None
-        self.timestamp = None
-
-        # point
-        self.point = None
 
         # corrections
-        self.d_lat = 0
-        self.d_lon = 0
-        self.d_altitude = 0
+        self.d_point = QgsPointXY(0,0)
         self.d_direction = 0
-        self.d_focal = 0
+        self.f_pixel_size = 1.0
 
         # transform (according to Worldfile definition (see wikipedia)
         self.a = None
@@ -223,33 +279,28 @@ class Image():
 
         # Setting the attributes
         self.width, self.height = pil_image.size
-        self.lat = lat
-        self.lon = lon
-        self.point = QgsPointXY(self.lon,self.lat)
-        self.altitude = gps_altitude[0] / gps_altitude[1]
-        self.direction = float(gps_direction) if gps_direction is not None else None
+        self.lat, self.lon = lat, lon
         self.focal = float(exif_data["FocalLengthIn35mmFilm"])
         self.timestamp = datetime.datetime.strptime(exif_data["DateTimeOriginal"], "%Y:%m:%d %H:%M:%S").timestamp()
-
-    def reproject(self):
-        """
-        This updates the points according the the droneMap's transformation
-        """
-        self.point = self.drone_map.xform.transform(QgsPointXY(self.lon,self.lat))
+        self.point = self.drone_map.reproject(lon,lat)
+        self.altitude = gps_altitude[0] / gps_altitude[1]
+        self.direction = float(gps_direction) if gps_direction is not None else None
+        self.pixel_size = (self.altitude * 35.0 / self.focal) / float(self.width)
 
     def update_transform(self):
         """
         This updates the image's transform parameters (in worldfile standards) according to it's attributes
         """
-        size_meter = self.altitude * 35.0 / self.focal
-        pixel_size = size_meter / float(self.width)
+        point_trsfd = QgsPointXY(self.point.x() + self.d_point.x(), self.point.y() + self.d_point.y())
+        direction_trsfd = self.direction + self.d_direction
+        pixel_size_trsfd = self.pixel_size * self.f_pixel_size
 
-        self.a = pixel_size * math.cos(self.direction)
-        self.d = pixel_size * math.sin(self.direction)
+        self.a = pixel_size_trsfd * math.cos(direction_trsfd)
+        self.d = pixel_size_trsfd * math.sin(direction_trsfd)
         self.b = self.d
         self.e = -self.a
-        self.c = self.point.x() - self.a*self.width/2.0 - self.b*self.height/2.0
-        self.f = self.point.y() - self.d*self.width/2.0 - self.e*self.height/2.0
+        self.c = point_trsfd.x() - self.a*self.width/2.0 - self.b*self.height/2.0
+        self.f = point_trsfd.y() - self.d*self.width/2.0 - self.e*self.height/2.0
 
         self.bounding_box = [[self.c,self.f],[self.c+self.a*self.width,self.f+self.d*self.width],[self.c+self.a*self.width+self.b*self.height,self.f+self.d*self.width+self.e*self.height],[self.c+self.b*self.height,self.f+self.e*self.height],]
 
@@ -313,4 +364,4 @@ class Image():
         rasterTransparency.setTransparentThreeValuePixelList([pixel])
 
     def __str__(self):
-        return "{} <{:.4f};{:.4f}> [{}]".format(self.name(), self.lon, self.lat, datetime.datetime.fromtimestamp(self.timestamp).strftime('%H:%M:%S'))
+        return "{} [{}]".format(self.name(), datetime.datetime.fromtimestamp(self.timestamp).strftime('%H:%M:%S'))

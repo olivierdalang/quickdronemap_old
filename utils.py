@@ -1,4 +1,6 @@
-import math
+import os, math
+
+import PIL
 
 def gps_tag_to_decimal_degress(value):
     """Helper function to convert the GPS coordinates stored in the EXIF to degress in float format"""
@@ -22,3 +24,14 @@ def absolute_angle_difference(b1, b2):
     if r >= math.pi:
         r -= math.pi*2.0
     return abs(r)
+
+def resized(img_path, factor=0.25):
+    """Given an input path, returns a scaled image path"""
+
+    filename = os.path.basename(img_path) + '.resized.{}.jpg'.format(factor)
+    output_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), filename)
+    if not os.path.exists(output_path):
+        img = PIL.Image.open(img_path)
+        img = img.resize((round(img.size[0]*factor), round(img.size[1]*factor)), PIL.Image.ANTIALIAS)
+        img.save(output_path)
+    return output_path

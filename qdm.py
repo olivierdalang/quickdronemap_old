@@ -328,27 +328,27 @@ class Image():
         <VRTDataset rasterXSize="{width}" rasterYSize="{height}">
             <GeoTransform>{c},{a},{d},{f},{b},{e}</GeoTransform>
             <VRTRasterBand dataType="Byte" band="1"><ColorInterp>Red</ColorInterp><SimpleSource>
-                    <SourceFilename relativeToVRT="0" shared="0">{path}</SourceFilename><SourceBand>1</SourceBand>
+                    <SourceFilename relativeToVRT="0" shared="0">{path}</SourceFilename>
                     <SourceProperties RasterXSize="{width}" RasterYSize="{height}" DataType="Byte" BlockXSize="{width}" BlockYSize="1" />
                     <SourceBand>1</SourceBand>
                     <SrcRect xOff="{xoff}" yOff="{yoff}" xSize="{xsize}" ySize="{ysize}" />
                     <DstRect xOff="{xoff}" yOff="{yoff}" xSize="{xsize}" ySize="{ysize}" />
             </SimpleSource></VRTRasterBand>
             <VRTRasterBand dataType="Byte" band="2"><ColorInterp>Green</ColorInterp><SimpleSource>
-                    <SourceFilename relativeToVRT="0" shared="0">{path}</SourceFilename><SourceBand>1</SourceBand>
+                    <SourceFilename relativeToVRT="0" shared="0">{path}</SourceFilename>
                     <SourceProperties RasterXSize="{width}" RasterYSize="{height}" DataType="Byte" BlockXSize="{width}" BlockYSize="1" />
                     <SourceBand>2</SourceBand>
                     <SrcRect xOff="{xoff}" yOff="{yoff}" xSize="{xsize}" ySize="{ysize}" />
                     <DstRect xOff="{xoff}" yOff="{yoff}" xSize="{xsize}" ySize="{ysize}" />
             </SimpleSource></VRTRasterBand>
             <VRTRasterBand dataType="Byte" band="3"><ColorInterp>Blue</ColorInterp><SimpleSource>
-                    <SourceFilename relativeToVRT="0" shared="0">{path}</SourceFilename><SourceBand>1</SourceBand>
+                    <SourceFilename relativeToVRT="0" shared="0">{path}</SourceFilename>
                     <SourceProperties RasterXSize="{width}" RasterYSize="{height}" DataType="Byte" BlockXSize="{width}" BlockYSize="1" />
                     <SourceBand>3</SourceBand>
                     <SrcRect xOff="{xoff}" yOff="{yoff}" xSize="{xsize}" ySize="{ysize}" />
                     <DstRect xOff="{xoff}" yOff="{yoff}" xSize="{xsize}" ySize="{ysize}" />
             </SimpleSource></VRTRasterBand>
-            </VRTDataset>"""
+        </VRTDataset>"""
         vrt = vrt.format(path=self.path, width=self.width, height=self.height, xsize=xsize, ysize=ysize, xoff=xoff, yoff=yoff, a=self.a, b=self.b, c=self.c, d=self.d, e=self.e, f=self.f)
         open(self.path+".vrt", 'w').write(vrt)
 

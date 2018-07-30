@@ -3,6 +3,13 @@ import math, os, datetime, tempfile, json
 from PIL import Image as PILImage
 from PIL import ExifTags as PILExifTags
 
+import numpy as np
+
+from scipy.optimize import least_squares
+import scipy as sp
+import scipy.misc
+import imreg_dft as ird
+
 from qgis.core import (QgsPointXY,QgsCoordinateReferenceSystem,QgsCoordinateTransform,QgsRasterTransparency,QgsProject)
 from qgis.gui import (QgsRubberBand)
 
@@ -10,18 +17,33 @@ from qgis.core import QgsWkbTypes
 
 from PyQt5.QtCore import Qt
 
-from .utils import absolute_angle_difference, gps_tag_to_decimal_degress
+from .utils import absolute_angle_difference, gps_tag_to_decimal_degress, resized, transform_matrix
+
 
 # Threshold over which images are not considered being in the same sequence (in radians)
 ANGLE_THRESHOLD = 15.0 / 180.0 * math.pi # 15°
 # Threshold over which images are not considered being in the same sequence (in seconds)
 TIME_THRESHOLD = 20
-# Offset to images loaded
-LOAD_LIMIT_OFFSET = 75
-# Count of images loaded (None or 0 for no limit)
-LOAD_LIMIT_COUNT = 8
 # Similarity will be computed on downscaled images. The lower the factor, the fastest the process
 DOWNSCALING_FACTOR = 0.05
+
+
+# Add some operands to QgsPointXY
+def add_qgs_points(self, other):
+    return QgsPointXY(self.x()+other.x(),self.y()+other.y())
+QgsPointXY.__add__ = add_qgs_points
+def sub_qgs_points(self, other):
+    return QgsPointXY(self.x()-other.x(),self.y()-other.y())
+QgsPointXY.__sub__ = sub_qgs_points
+def mul_qgs_points(self, factor):
+    return QgsPointXY(self.x()*factor,self.y()*factor)
+QgsPointXY.__mul__ = mul_qgs_points
+def rotated(self, angle):
+    return QgsPointXY( math.cos(angle)*self.x() - math.sin(angle)*self.y(), math.sin(angle)*self.x() + math.cos(angle)*self.y() )
+QgsPointXY.rotated = rotated
+def dist(self):
+    return math.sqrt(self.x()**2+self.y()**2)
+QgsPointXY.dist = dist
 
 
 class DroneMap():
@@ -30,6 +52,7 @@ class DroneMap():
         self.iface = iface
         self.folder = folder
         self.images = []
+        self.edges = []
         
         self.crs_src = QgsCoordinateReferenceSystem(4326)
         self.crs_dest = None
@@ -52,15 +75,17 @@ class DroneMap():
         Main process that go through all images and sets their transformation parameters
         """
 
-        print("1/ Instantiating all images...")
-        for root, dirs, files in os.walk(self.folder):
-            for file in files:
-                if file.endswith(".jpg") or file.endswith(".JPG"):
-                    image_path = os.path.join(root, file)
-                    image = Image(self, image_path)
-                    self.images.append(image)
-
-        self.images = self.images[LOAD_LIMIT_OFFSET:LOAD_LIMIT_OFFSET+LOAD_LIMIT_COUNT]
+        # print("1/ Instantiating all images...")
+        # for root, dirs, files in os.walk(self.folder):
+        #     for file in files:
+        #         if file.endswith(".jpg") or file.endswith(".JPG"):
+        #             image_path = os.path.join(root, file)
+        #             image = Image(self, image_path, len(self.images))
+        #             self.images.append(image)
+        # for i in list(range(327,332))+list(range(361,366))+list(range(395,400)):
+        for i in list(range(327,329))+list(range(365,366)):
+            path = "C:\\Users\\Olivier\\Dropbox\\Affaires\\SPC\\Sources\\quickdronemap\\test\\data\\DJI_{0:04d}.JPG".format(i)
+            self.images.append(Image(self, path, len(self.images)))
 
 
         print("2/ Loading image attributes and parsing exif tags...")
@@ -98,73 +123,168 @@ class DroneMap():
             next_image.prev_image = image
 
 
-        print("6/ Deriving orientation from image  [DISABLED]")
+        print("6/ Deriving orientation from image sequence")
         for image in self.images:
             # if the direction wasn't set in the Exif tags, we derive it from the image sequences
-            if image.direction is None:
+            if image.angle is None:
                 img_a = image.prev_image or image 
                 img_b = image.next_image or image 
 
-                # TODO : reenable this once transformation is sorted out
-                # image.direction = math.atan2(img_b.point.x()-img_a.point.x(),-img_b.point.y()+img_a.point.y())
-                image.direction = 0
+                image.angle = math.atan2(img_b.point.x()-img_a.point.x(),-img_b.point.y()+img_a.point.y())
 
 
         print("7/ Building image neighbourhood graph...")
-        # TODO
+        from scipy.spatial import Delaunay
+        points = [(i.point.x(),i.point.y()) for i in self.images]
+        triangulation = Delaunay(points)
 
-        print("8/ Adjusting all positions PROTOTYPE")        
-        from .utils import resized
-        import scipy as sp
-        import scipy.misc
-        import imreg_dft as ird
+        done = [[False for _i2 in self.images] for _i1 in self.images]
+        for tri in triangulation.simplices:
+            i1,i2,i3 = tri
+            if not done[i1][i2]:
+                e = Edge(self.images[i1], self.images[i2])
+                self.edges.append(e)
+                self.images[i1].edges.append(e)
+                self.images[i2].edges.append(e)
+                done[i1][i2] = True
+            if not done[i1][i3]:
+                e = Edge(self.images[i1], self.images[i3])
+                self.edges.append(e)
+                self.images[i1].edges.append(e)
+                self.images[i3].edges.append(e)
+                done[i1][i3] = True
+            if not done[i2][i3]:
+                e = Edge(self.images[i2], self.images[i3])
+                self.edges.append(e)
+                self.images[i2].edges.append(e)
+                self.images[i3].edges.append(e)
+                done[i2][i3] = True
 
-        def add_qgs_points(self, other):
-            return QgsPointXY(self.x()+other.x(),self.y()+other.y())
-        QgsPointXY.__add__ = add_qgs_points
-        def sub_qgs_points(self, other):
-            return QgsPointXY(self.x()-other.x(),self.y()-other.y())
-        QgsPointXY.__sub__ = sub_qgs_points
-        def mul_qgs_points(self, other):
-            return QgsPointXY(self.x()*other,self.y()*other)
-        QgsPointXY.__mul__ = mul_qgs_points
-
-        for i in range(0,len(self.images),2):
-
-            src = self.images[i]
-            mvg = self.images[i+1]
-
-            print("Doing image {}".format(src))
-
-            src_img_path = resized(src.path, factor=DOWNSCALING_FACTOR)
-            mvg_img_path = resized(mvg.path, factor=DOWNSCALING_FACTOR)
-
-            src_data = sp.misc.imread(src_img_path, True)
-            mvg_data = sp.misc.imread(mvg_img_path, True)        
-            result = ird.similarity(src_data, mvg_data)
-
-            delta = mvg.point-src.point
-
-            print("success : {}".format(result['success']))
-
-            # 'tvec': array([ 165.02376996,  -24.12990078])
-            # 'success': 0.057037194001802044
-            # 'angle': -0.19939725860962199
-            # 'scale': 0.99936381315221923
-            # 'Dscale': 0.0017803982088722529
-            # 'Dangle': 0.05625
-            # 'Dt': 0.25,
-
-            mvg.d_direction = result['angle'] / 180.0 * math.pi
-            mvg.f_pixel_size = result['scale']
-
-            print("TVEC is {}".format(result['tvec']))
-
-            translation_vector = QgsPointXY(result['tvec'][1], -result['tvec'][0])
-            translation_vector *= mvg.pixel_size*mvg.f_pixel_size/DOWNSCALING_FACTOR
-            mvg.d_point = src.point + translation_vector - mvg.point
+        print("8/ Computing similarities")
+        for edge in self.edges:
+            edge.compute_transform()
 
 
+        # print("9/ Optimizing")
+        # initial_guess = []
+        # for image in self.images:
+        #     initial_guess.append(float(image.point.x()))
+        #     initial_guess.append(float(image.point.y()))
+        #     initial_guess.append(image.angle)
+        #     initial_guess.append(image.scale)
+        # initial_guess_np = np.array(initial_guess, dtype=float)
+
+        # for image in self.images:
+        #     image.matrix = transform_matrix(image.scale, image.angle, image.tvec)
+        # for edge in self.edges:
+        #     edge.matrix = transform_matrix(image.scale, image.angle, image.tvec)
+
+        # def calculate_fitness(x):
+
+        #     total_fitness = 0
+        #     for edge in self.edges:
+
+        #         px_a = x[edge.imageA.id*4+0]
+        #         py_a = x[edge.imageA.id*4+1]
+        #         pa_a = x[edge.imageA.id*4+2]
+        #         ps_a = x[edge.imageA.id*4+3]
+
+        #         px_b = x[edge.imageB.id*4+0]
+        #         py_b = x[edge.imageB.id*4+1]
+        #         pa_b = x[edge.imageB.id*4+2]
+        #         ps_b = x[edge.imageB.id*4+3]
+
+
+        #     total_fitness = 0
+        #     for i,image in enumerate(self.images):
+
+        #         px = x[i*4+0]
+        #         py = x[i*4+1]
+        #         pa = x[i*4+2]
+        #         ps = x[i*4+3]
+
+        #         fitness = 0
+        #         for edge in image.edges:
+        #             reverse = image is edge.imageA
+        #             other = edge.other(image)
+
+        #             # print("DOING IMAGE {} TO {}".format(image, other))
+
+        #             d_angle = edge.angle
+        #             if reverse:
+        #                 d_angle *= -1.0
+        #             target_angle = other.angle + d_angle
+        #             fitness += absolute_angle_difference(target_angle, pa)
+
+        #             # f_scale = edge.scale
+        #             # if reverse:
+        #             #     f_scale = 1.0/f_scale
+        #             # target_psize = other.psize * f_scale
+        #             # fitness += abs(target_psize/ps)*10.0
+                    
+        #             d_point = QgsPointXY(edge.tvec[0],edge.tvec[1])
+        #             if reverse:
+        #                 d_point *= -1.0
+        #             d_point = d_point.rotated(other.angle)
+        #             d_point *= other.pixel_size*other.scale/DOWNSCALING_FACTOR
+        #             target_point = other.point + d_point
+
+        #             fitness += (target_point - QgsPointXY(px,py)).dist()
+        #         total_fitness += fitness/len(image.edges)
+        #     return total_fitness
+    
+        # res_1 = least_squares(calculate_fitness, initial_guess_np)
+        
+        # print("Initial guess")
+        # print(initial_guess_np)
+        # print("Results")
+        # print(res_1.x)
+
+        # for i,image in enumerate(self.images):
+        #     px = res_1.x[i*4+0]
+        #     py = res_1.x[i*4+1]
+        #     pa = res_1.x[i*4+2]
+        #     ps = res_1.x[i*4+3]
+        #     self.images[i].point = QgsPointXY(px, py)
+        #     self.images[i].angle = pa
+        #     self.images[i].psize = ps
+
+
+        print("8/ Adjusting positions PROTOTYPE")
+        for image in self.images[0:1]:
+
+            target_angles = []
+            target_psizes = []
+            target_points = []
+
+            error = 0.0
+
+            for edge in image.edges[0:1]:
+
+                reverse = image is edge.imageA
+                other = edge.other(image)
+
+                d_angle = edge.angle
+                if reverse:
+                    d_angle *= -1.0
+                image.target_angle = other.angle + d_angle
+
+                f_scale = edge.scale
+                if reverse:
+                    f_scale = 1.0/f_scale
+                image.target_scale = other.scale * f_scale
+
+                d_point = QgsPointXY(edge.tvec[0],edge.tvec[1])
+                if reverse:
+                    d_point *= -1.0
+                d_point = d_point.rotated(other.angle)
+                d_point *= other.pixel_size/DOWNSCALING_FACTOR
+                image.target_point = other.point + d_point
+
+        for image in self.images[0:1]:
+            image.angle = image.target_angle
+            image.scale = image.target_scale
+            image.point = image.target_point
 
         
         print("8/ Computing all transforms...")
@@ -175,15 +295,29 @@ class DroneMap():
         img_data = {"type": "FeatureCollection","features": []}
         for image in self.images:
             coords = [image.lon, image.lat]
-            props = {k:str(v) for (k,v) in vars(image).items()}
+            props = {k:v for (k,v) in vars(image).items()}
             feature = {"type": "Feature","properties": props,"geometry": {"type": "Point","coordinates": coords}}
             img_data['features'].append(feature)
         
         img_file = tempfile.NamedTemporaryFile(mode='w+', suffix='.geojson', delete=False)
-        json.dump(img_data, img_file)
+        json.dump(img_data, img_file, default=lambda o: str(o))
         img_file.close()
         layer = self.iface.addVectorLayer(img_file.name,"[DEBUG] Geolocated images","ogr")
         layer.loadNamedStyle(os.path.join(os.path.dirname(os.path.realpath(__file__)),'debug_geolocated_style.qml'))
+        layer.setCrs(self.crs_src)
+
+        edg_data = {"type": "FeatureCollection","features": []}
+        for edge in self.edges:
+            coords = [[edge.imageA.lon, edge.imageA.lat],[edge.imageB.lon, edge.imageB.lat]]
+            props = {k:v for (k,v) in vars(edge).items()}
+            feature = {"type": "Feature","properties": props,"geometry": {"type": "LineString","coordinates": coords}}
+            edg_data['features'].append(feature)
+        
+        edg_file = tempfile.NamedTemporaryFile(mode='w+', suffix='.geojson', delete=False)
+        json.dump(edg_data, edg_file, default=lambda o: str(o))
+        edg_file.close()
+        layer = self.iface.addVectorLayer(edg_file.name,"[DEBUG] Graph edges","ogr")
+        layer.loadNamedStyle(os.path.join(os.path.dirname(os.path.realpath(__file__)),'debug_edges_style.qml'))
         layer.setCrs(self.crs_src)
 
     def load_worldfiles(self):
@@ -199,30 +333,36 @@ class DroneMap():
 
 class Image():
 
-    def __init__(self, drone_map, path):
+    def __init__(self, drone_map, path, id):
         self.drone_map = drone_map
+        # Image properties
+        self.id = id
         self.path = path
         self.width = None
         self.height = None
+        # Exif tags
         self.focal = None
         self.timestamp = None
         self.lat = None
         self.lon = None
+        self.direction = None
+        self.altitude = None
+        self.pixel_size = None
 
         # neighbouring attributes
         self.prev_image = None
         self.next_image = None
-        self.neighbours_images = []
+        self.edges = []
 
-        # image/tags attributes
+        # transform attributes
         self.point = None
-        self.altitude = None
-        self.direction = None
+        self.angle = None
+        self.scale = None
 
         # corrections
-        self.d_point = QgsPointXY(0,0)
-        self.d_direction = 0
-        self.f_pixel_size = 1.0
+        # self.d_point = QgsPointXY(0,0)
+        # self.d_direction = 0
+        # self.f_pixel_size = 1.0
 
         # transform (according to Worldfile definition (see wikipedia)
         self.a = None
@@ -277,30 +417,31 @@ class Image():
             if gps_longitude_ref != "E":
                 lon = 0 - lon
 
-        # Setting the attributes
+        # image attributes
         self.width, self.height = pil_image.size
+        # exif attributes
         self.lat, self.lon = lat, lon
         self.focal = float(exif_data["FocalLengthIn35mmFilm"])
         self.timestamp = datetime.datetime.strptime(exif_data["DateTimeOriginal"], "%Y:%m:%d %H:%M:%S").timestamp()
-        self.point = self.drone_map.reproject(lon,lat)
         self.altitude = gps_altitude[0] / gps_altitude[1]
         self.direction = float(gps_direction) if gps_direction is not None else None
         self.pixel_size = (self.altitude * 35.0 / self.focal) / float(self.width)
+        # transform attributes
+        self.point = self.drone_map.reproject(lon,lat)
+        self.angle = float(gps_direction) if gps_direction is not None else None
+        self.scale = 1.0
 
     def update_transform(self):
         """
         This updates the image's transform parameters (in worldfile standards) according to it's attributes
         """
-        point_trsfd = QgsPointXY(self.point.x() + self.d_point.x(), self.point.y() + self.d_point.y())
-        direction_trsfd = self.direction + self.d_direction
-        pixel_size_trsfd = self.pixel_size * self.f_pixel_size
 
-        self.a = pixel_size_trsfd * math.cos(direction_trsfd)
-        self.d = pixel_size_trsfd * math.sin(direction_trsfd)
+        self.a = self.scale * self.pixel_size * math.cos(self.angle)
+        self.d = self.scale * self.pixel_size * math.sin(self.angle)
         self.b = self.d
         self.e = -self.a
-        self.c = point_trsfd.x() - self.a*self.width/2.0 - self.b*self.height/2.0
-        self.f = point_trsfd.y() - self.d*self.width/2.0 - self.e*self.height/2.0
+        self.c = self.point.x() - self.a*self.width/2.0 - self.b*self.height/2.0
+        self.f = self.point.y() - self.d*self.width/2.0 - self.e*self.height/2.0
 
         self.bounding_box = [[self.c,self.f],[self.c+self.a*self.width,self.f+self.d*self.width],[self.c+self.a*self.width+self.b*self.height,self.f+self.d*self.width+self.e*self.height],[self.c+self.b*self.height,self.f+self.e*self.height],]
 
@@ -363,5 +504,87 @@ class Image():
         pixel.red, pixel.green, pixel.blue, pixel.percentTransparent = 0,0,0,100
         rasterTransparency.setTransparentThreeValuePixelList([pixel])
 
-    def __str__(self):
+    def __repr__(self):
         return "{} [{}]".format(self.name(), datetime.datetime.fromtimestamp(self.timestamp).strftime('%H:%M:%S'))
+
+class Edge():
+    
+    def __init__(self, imageA, imageB):
+        self.imageA = imageA
+        self.imageB = imageB
+
+        self.tvec = None
+        self.angle = None
+        self.scale = None
+        self.success = None
+
+    def other(self, image):
+        if image is self.imageA:
+            return self.imageB
+        elif image is self.imageB:
+            return self.imageA
+
+    def compute_transform(self):
+        src_img_path = resized(self.imageA.path, factor=DOWNSCALING_FACTOR)
+        mvg_img_path = resized(self.imageB.path, factor=DOWNSCALING_FACTOR)
+        
+        cache_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'cache.json')
+        if not os.path.exists(cache_path):
+            cache_file = open(cache_path, "w+")
+            cache_file.write("{}")
+            cache_file.close()
+
+        cache_file = open(cache_path, "r")
+        cache = json.load(cache_file)
+        cache_file.close()
+
+        try:
+            self.tvec = cache[src_img_path][mvg_img_path]['tvec']
+            self.angle = cache[src_img_path][mvg_img_path]['angle']
+            self.scale = cache[src_img_path][mvg_img_path]['scale']
+            self.success = cache[src_img_path][mvg_img_path]['success']
+        except KeyError:
+
+            src_data = sp.misc.imread(src_img_path, True)
+            mvg_data = sp.misc.imread(mvg_img_path, True)
+            result = ird.similarity(src_data, mvg_data)
+
+            self.tvec = result['tvec'][1], -result['tvec'][0] # (Y,X)
+            self.angle = result['angle'] / 180.0 * math.pi
+            self.scale = result['scale']
+            self.success = result['success']
+
+            if src_img_path not in cache:
+                cache[src_img_path] = {}
+            if mvg_img_path not in cache[src_img_path]:
+                cache[src_img_path][mvg_img_path] = {}
+            
+            cache[src_img_path][mvg_img_path]['tvec'] = self.tvec
+            cache[src_img_path][mvg_img_path]['angle'] = self.angle
+            cache[src_img_path][mvg_img_path]['scale'] = self.scale
+            cache[src_img_path][mvg_img_path]['success'] = self.success
+            cache[src_img_path][mvg_img_path]['matrix'] = self.matrix
+            cache_file = open(cache_path, "w")
+            json.dump(cache, cache_file)
+            cache_file.close()
+
+    def transform_matrix():
+        s = self.scale
+        cosA, sinA = math.cos(self.angle), math.sin(self.angle)
+        dx, dy = self.tvec
+        mtrx_scale = np.matrix([
+            [s, 0, 0],
+            [0, s, 0],
+            [0, 0, 1],
+        ])
+        mtrx_rotate = np.matrix([
+            [cosA, -sinA, 0],
+            [sinA,  cosA, 0],
+            [0,     0,    1],
+        ])
+        mtrx_offset = np.matrix([
+            [1,0,dx],
+            [0,1,dy],
+            [0,0,1 ],
+        ]) 
+        return mtrx_rotate * mtrx_scale * mtrx_offset

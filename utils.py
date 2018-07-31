@@ -39,14 +39,12 @@ def resized(img_path, factor=0.25):
     return output_path
 
 
-def transform_matrix(scale, angle, tvec):
-    s = scale
+def transform_matrix(scale, angle, dx, dy):
     cosA, sinA = math.cos(angle), math.sin(angle)
-    dx, dy = tvec
     mtrx_scale = np.matrix([
-        [s, 0, 0],
-        [0, s, 0],
-        [0, 0, 1],
+        [scale, 0,     0],
+        [0,     scale, 0],
+        [0,     0,     1],
     ])
     mtrx_rotate = np.matrix([
         [cosA, -sinA, 0],
@@ -58,4 +56,5 @@ def transform_matrix(scale, angle, tvec):
         [0,1,dy],
         [0,0,1 ],
     ]) 
-    return mtrx_rotate * mtrx_scale * mtrx_offset
+    return mtrx_offset * mtrx_scale * mtrx_rotate
+

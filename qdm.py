@@ -26,7 +26,7 @@ ANGLE_THRESHOLD = 15.0 / 180.0 * math.pi # 15°
 # Threshold over which images are not considered being in the same sequence (in seconds)
 TIME_THRESHOLD = 20
 # Similarity will be computed on downscaled images. The lower the factor, the fastest the process
-DOWNSCALING_FACTOR = 0.05
+DOWNSCALING_FACTOR = 0.025
 
 
 # Add some operands to QgsPointXY
@@ -76,7 +76,7 @@ class DroneMap():
         Main process that go through all images and sets their transformation parameters
         """
 
-        # print("1/ Instantiating all images...")
+        print("1/ Instantiating all images...")
         # for root, dirs, files in os.walk(self.folder):
         #     for file in files:
         #         if file.endswith(".jpg") or file.endswith(".JPG"):
@@ -84,7 +84,8 @@ class DroneMap():
         #             image = Image(self, image_path, len(self.images))
         #             self.images.append(image)
         # for i in [301,300,329]: # 3 images, transform fails on all of them
-        for i in [397,398,364]: # 3 images, transform fails on all of them
+        # for i in [397,398,364]: # 3 images, transform fails on one of them
+        for i in [377,380,381]: # 3 images, transform works on all of them
             path = "C:\\Users\\Olivier\\Dropbox\\Affaires\\SPC\\Sources\\quickdronemap\\test\\data\\DJI_{0:04d}.JPG".format(i)
             self.images.append(Image(self, path, len(self.images)))
 
@@ -93,7 +94,7 @@ class DroneMap():
         for image in self.images:
             image.set_attributes()
 
-        print("5/ Building image sequences...")
+        print("3/ Building image sequences...")
         sorted_images = sorted(self.images, key=lambda x: x.timestamp)
         for i in range(len(sorted_images)):
 
@@ -123,8 +124,12 @@ class DroneMap():
             image.next_image = next_image
             next_image.prev_image = image
 
+            
+        print("INITIAL")
+        initial_guess_np, _ = self.get_initial_values_and_bounds()
+        self.calculate_fitness(initial_guess_np)
 
-        print("6/ Deriving orientation from image sequence")
+        print("4/ Deriving orientation from image sequence")
         for image in self.images:
             # if the direction wasn't set in the Exif tags, we derive it from the image sequences
             if image.angle is None:
@@ -134,8 +139,12 @@ class DroneMap():
                 # image.angle = math.atan2(img_b.point.x()-img_a.point.x(),-img_b.point.y()+img_a.point.y())
                 image.angle = 0.0
 
+        print("AFTER ORIENTATION")
+        initial_guess_np, _ = self.get_initial_values_and_bounds()
+        self.calculate_fitness(initial_guess_np)
 
-        print("7/ Building image neighbourhood graph...")
+
+        print("5/ Building image neighbourhood graph...")
         from scipy.spatial import Delaunay
         points = [(i.point.x(),i.point.y()) for i in self.images]
         triangulation = Delaunay(points)
@@ -162,60 +171,52 @@ class DroneMap():
                 self.images[i3].edges.append(e)
                 done[i2][i3] = True
 
-        print("8/ Computing similarities")
+        print("6/ Computing similarities")
         for edge in self.edges:
             edge.compute_transform()
 
-        # print("FITNESS A")
+
+        # print("8/ Adjusting positions PROTOTYPE")
+        # for edge in self.edges:
+
+        #     print("Doing {}".format(edge))
+
+        #     other = edge.other(image)
+
+        #     d_angle = edge.angle
+        #     edge.imageB.angle = edge.imageA.angle + d_angle
+
+        #     f_scale = edge.scale
+        #     edge.imageB.scale = edge.imageA.scale * f_scale
+
+        #     d_point = QgsPointXY(edge.tvec[0],edge.tvec[1])
+        #     d_point = d_point.rotated(edge.imageA.angle)
+        #     d_point *= edge.imageA.pixel_size/DOWNSCALING_FACTOR
+        #     edge.imageB.point = edge.imageA.point + d_point
+
+        # print("AFTER PROTOTYPE PLACEMENT")
         # initial_guess_np, _ = self.get_initial_values_and_bounds()
-        # print(self.calculate_fitness(initial_guess_np))
-
-        print("8/ Adjusting positions PROTOTYPE")
-        for edge in self.edges:
-
-            print("Doing {}".format(edge))
-
-            other = edge.other(image)
-
-            d_angle = edge.angle
-            edge.imageB.angle = edge.imageA.angle + d_angle
-
-            f_scale = edge.scale
-            edge.imageB.scale = edge.imageA.scale * f_scale
-
-            d_point = QgsPointXY(edge.tvec[0],edge.tvec[1])
-            d_point = d_point.rotated(edge.imageA.angle)
-            d_point *= edge.imageA.pixel_size/DOWNSCALING_FACTOR
-            edge.imageB.point = edge.imageA.point + d_point
-
-        print("FITNESS B")
-        initial_guess_np, _ = self.get_initial_values_and_bounds()
-        print(self.calculate_fitness(initial_guess_np))
+        # self.calculate_fitness(initial_guess_np)
 
 
-        # print("9/ Optimizing")
-        # initial_guess_np, bounds = self.get_initial_values_and_bounds()
+        print("7/ Optimizing")
+        initial_guess_np, bounds = self.get_initial_values_and_bounds()
     
-        # # res_1 = least_squares(calculate_fitness, initial_guess_np, bounds=([b[0] for b in bounds],[b[1] for b in bounds]))
-        # res_1 = minimize(self.calculate_fitness, initial_guess_np, bounds=bounds)
-        
-        # print("Initial guess")
-        # print(initial_guess_np)
-        # print("Results")
-        # print(res_1.x)
+        # res_1 = least_squares(calculate_fitness, initial_guess_np, bounds=([b[0] for b in bounds],[b[1] for b in bounds]))
+        res_1 = minimize(self.calculate_fitness, initial_guess_np, bounds=bounds)
 
-        # for image in self.images:
-        #     px = res_1.x[image.id*4+0]
-        #     py = res_1.x[image.id*4+1]
-        #     pa = res_1.x[image.id*4+2]
-        #     ps = res_1.x[image.id*4+3]
-        #     image.point = QgsPointXY(px, py)
-        #     image.angle = pa
-        #     image.psize = ps
+        for image in self.images:
+            px = res_1.x[image.id*4+0]
+            py = res_1.x[image.id*4+1]
+            pa = res_1.x[image.id*4+2]
+            ps = res_1.x[image.id*4+3]
+            image.point = QgsPointXY(px, py)
+            image.angle = pa
+            image.psize = ps
 
-        # print("FITNESS C")
-        # initial_guess_np, _ = self.get_initial_values_and_bounds()
-        # print(self.calculate_fitness(initial_guess_np))
+        print("AFTER OPTIMIZATON")
+        initial_guess_np, _ = self.get_initial_values_and_bounds()
+        self.calculate_fitness(initial_guess_np)
         
         print("8/ Computing all transforms...")
         for image in self.images:
@@ -270,7 +271,6 @@ class DroneMap():
 
 
     def calculate_fitness(self, x):
-        print("Calculating fitness")
         total_fitness = 0
         for edge in self.edges:
             px_a = x[edge.imageA.id*4+0]
@@ -509,8 +509,7 @@ class Edge():
         try:
             self.tvec = cache[src_img_path][mvg_img_path]['tvec']
             self.angle = cache[src_img_path][mvg_img_path]['angle']
-            # self.scale = cache[src_img_path][mvg_img_path]['scale']
-            self.scale = 1.0 # TODO : REMOVE THIS !!!
+            self.scale = cache[src_img_path][mvg_img_path]['scale']
             self.success = cache[src_img_path][mvg_img_path]['success']
         except KeyError:
 
@@ -520,8 +519,7 @@ class Edge():
 
             self.tvec = result['tvec'][1], -result['tvec'][0] # (Y,X)
             self.angle = result['angle'] / 180.0 * math.pi
-            # self.scale = result['scale']
-            self.scale = result['scale'] = 1.0 # TODO : REMOVE THIS !!!
+            self.scale = result['scale']
             self.success = result['success']
 
             if src_img_path not in cache:
@@ -540,14 +538,7 @@ class Edge():
     def calculate_score(self, a_x, a_y, a_angle, a_scale, b_x, b_y, b_angle, b_scale):
         """
         This calculates the score of this edge with custom parameter values (to be used by optimizer)
-        """
-
-        print("calulating score for edge {}...".format(self))
-
-        print("params are :")
-        for p in ['a_x', 'a_y', 'a_angle', 'a_scale', 'b_x', 'b_y', 'b_angle', 'b_scale']:
-            print("{}: {}".format(p,str(vars()[p])))
-        
+        """        
         # We get the transform matrix (matrix to transform from A to B, as calculated by imreg_dft)
         tvec = QgsPointXY(self.tvec[0],self.tvec[1])
         tvec *= self.imageA.pixel_size * a_scale / DOWNSCALING_FACTOR
@@ -559,21 +550,7 @@ class Edge():
         # We get the point B transform matrix (matrix to transform from local to B coordinates)
         ptB_matrix = transform_matrix(b_scale, b_angle, b_x, b_y)
 
-        print("ptA_matrix")
-        print(ptA_matrix)
-        print("edge_matrix")
-        print(edge_matrix)
-        print("ptA_edge_matrix")
-        print(ptA_edge_matrix)
-        print("ptB_matrix")
-        print(ptB_matrix)
-
-        # Now we compare how well ptA_edge_matrix and ptB_matrix are similar using two sample points (in homogeneous coordinates)
-        sample0 = [[0],[0],[1]]
-        sample0_a = ptA_matrix * sample0
-        sample0_b = ptB_matrix * sample0
-        sample0_ab = ptA_edge_matrix * sample0
-        
+        # Now we compare how well ptA_edge_matrix and ptB_matrix are similar using two sample points (in homogeneous coordinates)       
         sample1 = [[10],[0],[1]]
         sample1_a = ptA_matrix * sample1
         sample1_b = ptB_matrix * sample1
@@ -587,31 +564,8 @@ class Edge():
         # The score is the distance between the two transformed points (summed)
         score1 = math.sqrt((sample1_b.item(0)-sample1_ab.item(0))**2 + (sample1_b.item(1)-sample1_ab.item(1))**2)
         score2 = math.sqrt((sample2_b.item(0)-sample2_ab.item(0))**2 + (sample2_b.item(1)-sample2_ab.item(1))**2)
-        
-        print('sample1_b')
-        print(sample1_b)
-        print('sample1_ab')
-        print(sample1_ab)
-        # print('sample2_b')
-        # print(sample2_b)
-        # print('sample2_ab')
-        # print(sample2_ab)
-
-        img_data = {"type": "FeatureCollection","features": [], "crs": {"type": "EPSG","properties": {"code": 32628,"coordinate_order": [1, 0]}}}
-        img_data['features'].append({"type": "Feature","properties": {'edge':self,'name':'sampleA'},"geometry": {"type": "LineString","coordinates":  [[sample1_a.item(0), sample1_a.item(1)], [sample0_a.item(0), sample0_a.item(1)], [sample2_a.item(0), sample2_a.item(1)]]}})
-        img_data['features'].append({"type": "Feature","properties": {'edge':self,'name':'sampleB'},"geometry": {"type": "LineString","coordinates":  [[sample1_b.item(0), sample1_b.item(1)], [sample0_b.item(0), sample0_b.item(1)], [sample2_b.item(0), sample2_b.item(1)]]}})
-        img_data['features'].append({"type": "Feature","properties": {'edge':self,'name':'sampleAB'},"geometry": {"type": "LineString","coordinates": [[sample1_ab.item(0),sample1_ab.item(1)],[sample0_ab.item(0),sample0_ab.item(1)],[sample2_ab.item(0),sample2_ab.item(1)]]}})
-        debug_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'debug.{}.json'.format(self))
-        img_file = open(debug_path, 'w')        
-        json.dump(img_data, img_file, default=lambda o: str(o))
-        img_file.close()
-        # layer.setCrs(self.crs_src)
-
-        # print("score")
-        print("score1: {} score2: {}".format(score1,score2))
 
         return score1 + score2
-
 
     def __repr__(self):
         return "Edge {}-{}".format(self.imageA.name(), self.imageB.name())

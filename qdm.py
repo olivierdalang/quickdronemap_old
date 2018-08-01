@@ -18,6 +18,7 @@ from qgis.gui import (QgsRubberBand)
 from qgis.core import QgsWkbTypes
 
 from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QApplication
 
 from .utils import absolute_angle_difference, gps_tag_to_decimal_degress, resized, transform_matrix
 
@@ -84,30 +85,30 @@ class DroneMap():
         Main process that go through all images and sets their transformation parameters
         """
 
-        QgsMessageLog.logMessage("1/ Instantiating all images...", "QuickDroneMap")
+        QgsMessageLog.logMessage("1/ Instantiating all images...", "QuickDroneMap", 0)
         for root, dirs, files in os.walk(self.folder):
             for file in files:
                 if file.endswith(".jpg") or file.endswith(".JPG"):
                     image_path = os.path.join(root, file)
                     image = Image(self, image_path)
                     self.images.append(image)
-        # self.images = self.images[0:25]
+        self.images = self.images[60:80]
         # for i in [301,300,329]: # 3 images, transform fails on all of them
         # for i in [397,398,364]: # 3 images, transform fails on one of them
         # for i in [377,380,381]: # 3 images, transform works on all of them
         #     path = "C:\\Users\\Olivier\\Dropbox\\Affaires\\SPC\\Sources\\quickdronemap\\test\\data\\DJI_{0:04d}.JPG".format(i)
         #     self.images.append(Image(self, path))
 
-        QgsMessageLog.logMessage("2/ Assigning ids", "QuickDroneMap")
+        QgsMessageLog.logMessage("2/ Assigning ids", "QuickDroneMap", 0)
         for i, image in enumerate(self.images):
             image.id = i
 
 
-        QgsMessageLog.logMessage("2/ Loading image attributes and parsing exif tags...", "QuickDroneMap")
+        QgsMessageLog.logMessage("2/ Loading image attributes and parsing exif tags...", "QuickDroneMap", 0)
         for image in self.images:
             image.set_attributes()
 
-        QgsMessageLog.logMessage("3/ Building image sequences...", "QuickDroneMap")
+        QgsMessageLog.logMessage("3/ Building image sequences...", "QuickDroneMap", 0)
         sorted_images = sorted(self.images, key=lambda x: x.timestamp)
         for i in range(len(sorted_images)):
 
@@ -137,7 +138,7 @@ class DroneMap():
             image.next_image = next_image
             next_image.prev_image = image
 
-        QgsMessageLog.logMessage("4/ Deriving orientation from image sequence", "QuickDroneMap")
+        QgsMessageLog.logMessage("4/ Deriving orientation from image sequence", "QuickDroneMap", 0)
         for image in self.images:
             # if the direction wasn't set in the Exif tags, we derive it from the image sequences
             if image.angle is None:
@@ -147,7 +148,7 @@ class DroneMap():
                 # image.angle = math.atan2(img_b.point.x()-img_a.point.x(),-img_b.point.y()+img_a.point.y())
                 image.angle = 0.0
 
-        QgsMessageLog.logMessage("5/ Building image neighbourhood graph...", "QuickDroneMap")
+        QgsMessageLog.logMessage("5/ Building image neighbourhood graph...", "QuickDroneMap", 0)
         from scipy.spatial import Delaunay
         points = [(i.point.x(),i.point.y()) for i in self.images]
         triangulation = Delaunay(points)
@@ -174,17 +175,20 @@ class DroneMap():
                 self.images[i3].edges.append(e)
                 done[i2][i3] = True
 
-        QgsMessageLog.logMessage("6/ Computing similarities", "QuickDroneMap")
-        for edge in self.edges:
+        QgsMessageLog.logMessage("6/ Computing similarities", "QuickDroneMap", 0)
+        for i, edge in enumerate(self.edges):
+            QgsMessageLog.logMessage("Done {} out of {}".format(i,len(self.edges)), "QuickDroneMap", 0)
+            QApplication.processEvents()
             edge.compute_transform()
 
         initial_guess_np, _ = self.get_initial_values_and_bounds()
-        QgsMessageLog.logMessage("Initial fitness is {}".format(self.calculate_fitness(initial_guess_np)), "QuickDroneMap")
+        QgsMessageLog.logMessage("Initial fitness is {}".format(self.calculate_fitness(initial_guess_np)), "QuickDroneMap", 0)
 
         # print("TESTING QUALITY OF SIMILARITY (disable optimization to do this)")
         # done = []
         # edges_to_delete = []
         # for edge in self.edges:
+        #         QApplication.processEvents()
 
         #     if edge.imageA in done or edge.imageB in done:
         #         edges_to_delete.append(edge)
@@ -212,8 +216,9 @@ class DroneMap():
         # self.calculate_fitness(initial_guess_np)
 
 
-        QgsMessageLog.logMessage("7/ Optimizing", "QuickDroneMap")
+        QgsMessageLog.logMessage("7/ Optimizing", "QuickDroneMap", 0)
         initial_guess_np, bounds = self.get_initial_values_and_bounds()
+        QApplication.processEvents()
     
         # res_1 = least_squares(calculate_fitness, initial_guess_np, bounds=([b[0] for b in bounds],[b[1] for b in bounds]))
         res_1 = minimize(self.calculate_fitness, initial_guess_np, bounds=bounds)
@@ -228,13 +233,24 @@ class DroneMap():
             image.psize = ps
 
         initial_guess_np, _ = self.get_initial_values_and_bounds()
-        QgsMessageLog.logMessage("After optimization fitness is {}".format(self.calculate_fitness(initial_guess_np)), "QuickDroneMap")
+        QgsMessageLog.logMessage("After optimization fitness is {}".format(self.calculate_fitness(initial_guess_np)), "QuickDroneMap", 0)
         
-        QgsMessageLog.logMessage("8/ Computing all transforms...", "QuickDroneMap")
+        QgsMessageLog.logMessage("8/ Computing all transforms...", "QuickDroneMap", 0)
         for image in self.images:
             image.update_transform()
 
-        QgsMessageLog.logMessage("9/ Creating debug jsons files", "QuickDroneMap")
+            
+        QgsMessageLog.logMessage("9a/ Creating and loading worldfiles", "QuickDroneMap", 0)
+        for image in self.images:
+            image.write_worldfile()
+            image.load_worldfile(self.iface)
+
+        QgsMessageLog.logMessage("9b/ Creating and loading vrts", "QuickDroneMap", 0)
+        for image in self.images:
+            image.write_vrt()
+            image.load_vrt(self.iface)
+
+        QgsMessageLog.logMessage("10/ Creating debug jsons files", "QuickDroneMap", 0)
         edg_data = {"type": "FeatureCollection","features": [], "crs": {"type": "EPSG","properties": {"code": 32628}}} # TODO : use self.crs
         for edge in self.edges:
             coords = [[edge.imageA.point.x(), edge.imageA.point.y()],[edge.imageB.point.x(), edge.imageB.point.y()]]
@@ -243,7 +259,6 @@ class DroneMap():
             props['angle_b'] = edge.imageB.angle
             feature = {"type": "Feature","properties": props,"geometry": {"type": "LineString","coordinates": coords}}
             edg_data['features'].append(feature)
-
         
         edg_file = tempfile.NamedTemporaryFile(mode='w+', suffix='.geojson', delete=False)
         json.dump(edg_data, edg_file, default=lambda o: str(o))
@@ -303,18 +318,14 @@ class DroneMap():
             score = edge.calculate_score(px_a, py_a, pa_a, ps_a,
                                          px_b, py_b, pa_b, ps_b)
             total_fitness += score
-        # QgsMessageLog.logMessage("Total fitness is {} ({} edges ignored)".format(total_fitness,ignored_count), "QuickDroneMap")
+        if not hasattr(self,'_v'):
+            self._v = 100
+        if self._v % 100 == 0:
+            QgsMessageLog.logMessage("Total fitness is {} ({} edges ignored)".format(total_fitness,ignored_count), "QuickDroneMap", 0)
+            QApplication.processEvents()
+        self._v += 1
         return total_fitness
 
-    def load_worldfiles(self):
-        for image in self.images:
-            image.write_worldfile()
-            image.load_worldfile(self.iface)
-
-    def load_vrts(self):
-        for image in self.images:
-            image.write_vrt()
-            image.load_vrt(self.iface)
 
 
 class Image():

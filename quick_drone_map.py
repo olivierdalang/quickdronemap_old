@@ -57,5 +57,5 @@ class QuickDroneMap:
         if result:
             drone_map = DroneMap(self.iface, self.dlg.pathLineEdit.text())
             drone_map.process()
-            drone_map.load_worldfiles()
-            # drone_map.load_vrts()
+            # drone_map.load_worldfiles()
+            drone_map.load_vrts()

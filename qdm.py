@@ -10,8 +10,9 @@ from scipy.optimize import minimize
 import scipy as sp
 import scipy.misc
 import imreg_dft as ird
+import imreg_dft.utils
 
-from qgis.core import (QgsPointXY,QgsCoordinateReferenceSystem,QgsCoordinateTransform,QgsRasterTransparency,QgsProject)
+from qgis.core import (QgsPointXY,QgsCoordinateReferenceSystem,QgsCoordinateTransform,QgsRasterTransparency,QgsProject, QgsMessageLog)
 from qgis.gui import (QgsRubberBand)
 
 from qgis.core import QgsWkbTypes
@@ -27,6 +28,13 @@ ANGLE_THRESHOLD = 15.0 / 180.0 * math.pi # 15°
 TIME_THRESHOLD = 20
 # Similarity will be computed on downscaled images. The lower the factor, the fastest the process
 DOWNSCALING_FACTOR = 0.025
+# Parameter for imreg_dft (higher is better but slower)
+IMREG_DFT_NUMITER = 5
+# Parameter for imreg_dft (to determine extend parameter in pixel values, should correspond to typical image overlap)
+# IMREG_DFT_EXTEND_RATIO = 0.333
+IMREG_DFT_EXTEND = 50
+# Similarities under this threshold won't be taken into account (probably invalid)
+SUCCESS_THRESHOLD = 0.1
 
 
 # Add some operands to QgsPointXY
@@ -76,25 +84,30 @@ class DroneMap():
         Main process that go through all images and sets their transformation parameters
         """
 
-        print("1/ Instantiating all images...")
-        # for root, dirs, files in os.walk(self.folder):
-        #     for file in files:
-        #         if file.endswith(".jpg") or file.endswith(".JPG"):
-        #             image_path = os.path.join(root, file)
-        #             image = Image(self, image_path, len(self.images))
-        #             self.images.append(image)
+        QgsMessageLog.logMessage("1/ Instantiating all images...", "QuickDroneMap")
+        for root, dirs, files in os.walk(self.folder):
+            for file in files:
+                if file.endswith(".jpg") or file.endswith(".JPG"):
+                    image_path = os.path.join(root, file)
+                    image = Image(self, image_path)
+                    self.images.append(image)
+        # self.images = self.images[0:25]
         # for i in [301,300,329]: # 3 images, transform fails on all of them
         # for i in [397,398,364]: # 3 images, transform fails on one of them
-        for i in [377,380,381]: # 3 images, transform works on all of them
-            path = "C:\\Users\\Olivier\\Dropbox\\Affaires\\SPC\\Sources\\quickdronemap\\test\\data\\DJI_{0:04d}.JPG".format(i)
-            self.images.append(Image(self, path, len(self.images)))
+        # for i in [377,380,381]: # 3 images, transform works on all of them
+        #     path = "C:\\Users\\Olivier\\Dropbox\\Affaires\\SPC\\Sources\\quickdronemap\\test\\data\\DJI_{0:04d}.JPG".format(i)
+        #     self.images.append(Image(self, path))
+
+        QgsMessageLog.logMessage("2/ Assigning ids", "QuickDroneMap")
+        for i, image in enumerate(self.images):
+            image.id = i
 
 
-        print("2/ Loading image attributes and parsing exif tags...")
+        QgsMessageLog.logMessage("2/ Loading image attributes and parsing exif tags...", "QuickDroneMap")
         for image in self.images:
             image.set_attributes()
 
-        print("3/ Building image sequences...")
+        QgsMessageLog.logMessage("3/ Building image sequences...", "QuickDroneMap")
         sorted_images = sorted(self.images, key=lambda x: x.timestamp)
         for i in range(len(sorted_images)):
 
@@ -124,12 +137,7 @@ class DroneMap():
             image.next_image = next_image
             next_image.prev_image = image
 
-            
-        print("INITIAL")
-        initial_guess_np, _ = self.get_initial_values_and_bounds()
-        self.calculate_fitness(initial_guess_np)
-
-        print("4/ Deriving orientation from image sequence")
+        QgsMessageLog.logMessage("4/ Deriving orientation from image sequence", "QuickDroneMap")
         for image in self.images:
             # if the direction wasn't set in the Exif tags, we derive it from the image sequences
             if image.angle is None:
@@ -139,12 +147,7 @@ class DroneMap():
                 # image.angle = math.atan2(img_b.point.x()-img_a.point.x(),-img_b.point.y()+img_a.point.y())
                 image.angle = 0.0
 
-        print("AFTER ORIENTATION")
-        initial_guess_np, _ = self.get_initial_values_and_bounds()
-        self.calculate_fitness(initial_guess_np)
-
-
-        print("5/ Building image neighbourhood graph...")
+        QgsMessageLog.logMessage("5/ Building image neighbourhood graph...", "QuickDroneMap")
         from scipy.spatial import Delaunay
         points = [(i.point.x(),i.point.y()) for i in self.images]
         triangulation = Delaunay(points)
@@ -171,17 +174,24 @@ class DroneMap():
                 self.images[i3].edges.append(e)
                 done[i2][i3] = True
 
-        print("6/ Computing similarities")
+        QgsMessageLog.logMessage("6/ Computing similarities", "QuickDroneMap")
         for edge in self.edges:
             edge.compute_transform()
 
+        initial_guess_np, _ = self.get_initial_values_and_bounds()
+        QgsMessageLog.logMessage("Initial fitness is {}".format(self.calculate_fitness(initial_guess_np)), "QuickDroneMap")
 
-        # print("8/ Adjusting positions PROTOTYPE")
+        # print("TESTING QUALITY OF SIMILARITY (disable optimization to do this)")
+        # done = []
+        # edges_to_delete = []
         # for edge in self.edges:
 
-        #     print("Doing {}".format(edge))
+        #     if edge.imageA in done or edge.imageB in done:
+        #         edges_to_delete.append(edge)
+        #         continue
 
-        #     other = edge.other(image)
+        #     done.append(edge.imageA)
+        #     done.append(edge.imageB)
 
         #     d_angle = edge.angle
         #     edge.imageB.angle = edge.imageA.angle + d_angle
@@ -193,13 +203,16 @@ class DroneMap():
         #     d_point = d_point.rotated(edge.imageA.angle)
         #     d_point *= edge.imageA.pixel_size/DOWNSCALING_FACTOR
         #     edge.imageB.point = edge.imageA.point + d_point
+        # for edge in edges_to_delete:
+        #     self.edges.remove(edge)
+
 
         # print("AFTER PROTOTYPE PLACEMENT")
         # initial_guess_np, _ = self.get_initial_values_and_bounds()
         # self.calculate_fitness(initial_guess_np)
 
 
-        print("7/ Optimizing")
+        QgsMessageLog.logMessage("7/ Optimizing", "QuickDroneMap")
         initial_guess_np, bounds = self.get_initial_values_and_bounds()
     
         # res_1 = least_squares(calculate_fitness, initial_guess_np, bounds=([b[0] for b in bounds],[b[1] for b in bounds]))
@@ -214,42 +227,43 @@ class DroneMap():
             image.angle = pa
             image.psize = ps
 
-        print("AFTER OPTIMIZATON")
         initial_guess_np, _ = self.get_initial_values_and_bounds()
-        self.calculate_fitness(initial_guess_np)
+        QgsMessageLog.logMessage("After optimization fitness is {}".format(self.calculate_fitness(initial_guess_np)), "QuickDroneMap")
         
-        print("8/ Computing all transforms...")
+        QgsMessageLog.logMessage("8/ Computing all transforms...", "QuickDroneMap")
         for image in self.images:
             image.update_transform()
 
-        print("9/ Creating debug jsons files")
-        img_data = {"type": "FeatureCollection","features": []}
-        for image in self.images:
-            coords = [image.lon, image.lat]
-            props = {k:v for (k,v) in vars(image).items()}
-            feature = {"type": "Feature","properties": props,"geometry": {"type": "Point","coordinates": coords}}
-            img_data['features'].append(feature)
-        
-        img_file = tempfile.NamedTemporaryFile(mode='w+', suffix='.geojson', delete=False)
-        json.dump(img_data, img_file, default=lambda o: str(o))
-        img_file.close()
-        layer = self.iface.addVectorLayer(img_file.name,"[DEBUG] Geolocated images","ogr")
-        layer.loadNamedStyle(os.path.join(os.path.dirname(os.path.realpath(__file__)),'debug_geolocated_style.qml'))
-        layer.setCrs(self.crs_src)
-
-        edg_data = {"type": "FeatureCollection","features": []}
+        QgsMessageLog.logMessage("9/ Creating debug jsons files", "QuickDroneMap")
+        edg_data = {"type": "FeatureCollection","features": [], "crs": {"type": "EPSG","properties": {"code": 32628}}} # TODO : use self.crs
         for edge in self.edges:
-            coords = [[edge.imageA.lon, edge.imageA.lat],[edge.imageB.lon, edge.imageB.lat]]
+            coords = [[edge.imageA.point.x(), edge.imageA.point.y()],[edge.imageB.point.x(), edge.imageB.point.y()]]
             props = {k:v for (k,v) in vars(edge).items()}
+            props['angle_a'] = edge.imageA.angle
+            props['angle_b'] = edge.imageB.angle
             feature = {"type": "Feature","properties": props,"geometry": {"type": "LineString","coordinates": coords}}
             edg_data['features'].append(feature)
+
         
         edg_file = tempfile.NamedTemporaryFile(mode='w+', suffix='.geojson', delete=False)
         json.dump(edg_data, edg_file, default=lambda o: str(o))
         edg_file.close()
-        layer = self.iface.addVectorLayer(edg_file.name,"[DEBUG] Graph edges","ogr")
+        layer = self.iface.addVectorLayer(edg_file.name,"[DEBUG] Edges","ogr")
         layer.loadNamedStyle(os.path.join(os.path.dirname(os.path.realpath(__file__)),'debug_edges_style.qml'))
-        layer.setCrs(self.crs_src)
+        
+        graph_data = {"type": "FeatureCollection","features": [], "crs": {"type": "EPSG","properties": {"code": 4326}}} # TODO : use self.crs
+        for edge in self.edges:
+            coords = [[edge.imageA.lon, edge.imageA.lat],[edge.imageB.lon, edge.imageB.lat]]
+            props = {k:v for (k,v) in vars(edge).items()}
+            feature = {"type": "Feature","properties": props,"geometry": {"type": "LineString","coordinates": coords}}
+            graph_data['features'].append(feature)
+
+        graph_file = tempfile.NamedTemporaryFile(mode='w+', suffix='.geojson', delete=False)
+        json.dump(graph_data, graph_file, default=lambda o: str(o))
+        graph_file.close()
+        layer = self.iface.addVectorLayer(graph_file.name,"[DEBUG] Graph","ogr")
+        layer.loadNamedStyle(os.path.join(os.path.dirname(os.path.realpath(__file__)),'debug_graph_style.qml'))
+
 
     def get_initial_values_and_bounds(self):
         initial_guess = []
@@ -269,10 +283,15 @@ class DroneMap():
         initial_guess_np = np.array(initial_guess, dtype=float)
         return initial_guess_np, bounds
 
-
     def calculate_fitness(self, x):
         total_fitness = 0
+        ignored_count = 0
         for edge in self.edges:
+
+            if edge.success is not None and edge.success < SUCCESS_THRESHOLD:
+                ignored_count += 1
+                continue
+
             px_a = x[edge.imageA.id*4+0]
             py_a = x[edge.imageA.id*4+1]
             pa_a = x[edge.imageA.id*4+2]
@@ -284,9 +303,8 @@ class DroneMap():
             score = edge.calculate_score(px_a, py_a, pa_a, ps_a,
                                          px_b, py_b, pa_b, ps_b)
             total_fitness += score
-        print("Total fitness is {}".format(total_fitness))
+        # QgsMessageLog.logMessage("Total fitness is {} ({} edges ignored)".format(total_fitness,ignored_count), "QuickDroneMap")
         return total_fitness
-
 
     def load_worldfiles(self):
         for image in self.images:
@@ -301,10 +319,10 @@ class DroneMap():
 
 class Image():
 
-    def __init__(self, drone_map, path, id):
+    def __init__(self, drone_map, path):
         self.drone_map = drone_map
         # Image properties
-        self.id = id
+        self.id = None # must be initialized after instantiation, starting at 0 and with no missing values, as parameters array for optimization rely on those
         self.path = path
         self.width = None
         self.height = None
@@ -417,9 +435,9 @@ class Image():
         # CREATE THE WORLDFILE
         open(self.path+"w", 'w').write("{a}\n{d}\n{b}\n{e}\n{c}\n{f}".format(a=self.a,d=self.d,b=self.b,e=self.e,c=self.c,f=self.f))
         
-    def load_worldfile(self, iface):
+    def load_worldfile(self, iface, suffix=""):
         # Add to project
-        layer = iface.addRasterLayer(self.path,"WORLD-{}".format(self))
+        layer = iface.addRasterLayer(self.path,"WORLD-{}{}".format(self, suffix))
         layer.setCrs(self.drone_map.crs_dest)
         
         # We make black pixels transparent to remove the rotated frame, not ideal if there are actually black pixels in the image
@@ -461,9 +479,9 @@ class Image():
         vrt = vrt.format(path=self.path, width=self.width, height=self.height, xsize=xsize, ysize=ysize, xoff=xoff, yoff=yoff, a=self.a, b=self.b, c=self.c, d=self.d, e=self.e, f=self.f)
         open(self.path+".vrt", 'w').write(vrt)
 
-    def load_vrt(self, iface):
+    def load_vrt(self, iface, suffix=""):
         # Add to project
-        layer = iface.addRasterLayer(self.path+".vrt","VRT-{}".format(self))
+        layer = iface.addRasterLayer(self.path+".vrt","VRT-{}{}".format(self, suffix))
         layer.setCrs(self.drone_map.crs_dest)
         
         # We make black pixels transparent to remove the rotated frame, not ideal if there are actually black pixels in the image
@@ -473,7 +491,7 @@ class Image():
         rasterTransparency.setTransparentThreeValuePixelList([pixel])
 
     def __repr__(self):
-        return "{} [{}]".format(self.name(), datetime.datetime.fromtimestamp(self.timestamp).strftime('%H:%M:%S'))
+        return "{} [{}]".format(self.name(), self.id)
 
 class Edge():
     
@@ -496,43 +514,44 @@ class Edge():
         src_img_path = resized(self.imageA.path, factor=DOWNSCALING_FACTOR)
         mvg_img_path = resized(self.imageB.path, factor=DOWNSCALING_FACTOR)
         
-        cache_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'cache.json')
-        if not os.path.exists(cache_path):
-            cache_file = open(cache_path, "w+")
-            cache_file.write("{}")
-            cache_file.close()
+        cache_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'cache.txt')
 
-        cache_file = open(cache_path, "r")
-        cache = json.load(cache_file)
-        cache_file.close()
+        if os.path.exists(cache_path):
+            cache_file = open(cache_path, "r")
+            lines = cache_file.readlines()
+            cache_file.close()
+            cache = {k:v for k,v in [l.rsplit('\t',1) for l in lines]}
+        else:
+            cache = {}
+
+        key = "{}\t{}\t{}\t{}".format(src_img_path,mvg_img_path,IMREG_DFT_NUMITER,IMREG_DFT_EXTEND)
 
         try:
-            self.tvec = cache[src_img_path][mvg_img_path]['tvec']
-            self.angle = cache[src_img_path][mvg_img_path]['angle']
-            self.scale = cache[src_img_path][mvg_img_path]['scale']
-            self.success = cache[src_img_path][mvg_img_path]['success']
+            val = json.loads(cache[key])
+            self.tvec = val['tvec']
+            self.angle = val['angle']
+            self.scale = val['scale']
+            self.success = val['success']
         except KeyError:
 
             src_data = sp.misc.imread(src_img_path, True)
             mvg_data = sp.misc.imread(mvg_img_path, True)
-            result = ird.similarity(src_data, mvg_data)
+
+            src_data = imreg_dft.utils.extend_by(src_data, IMREG_DFT_EXTEND)
+            mvg_data = imreg_dft.utils.extend_by(mvg_data, IMREG_DFT_EXTEND)
+
+            result = ird.similarity(src_data, mvg_data, numiter=IMREG_DFT_NUMITER)
 
             self.tvec = result['tvec'][1], -result['tvec'][0] # (Y,X)
             self.angle = result['angle'] / 180.0 * math.pi
             self.scale = result['scale']
             self.success = result['success']
 
-            if src_img_path not in cache:
-                cache[src_img_path] = {}
-            if mvg_img_path not in cache[src_img_path]:
-                cache[src_img_path][mvg_img_path] = {}
+            val = json.dumps({'tvec':self.tvec,'angle':self.angle,'scale':self.scale,'success':self.success})
             
-            cache[src_img_path][mvg_img_path]['tvec'] = self.tvec
-            cache[src_img_path][mvg_img_path]['angle'] = self.angle
-            cache[src_img_path][mvg_img_path]['scale'] = self.scale
-            cache[src_img_path][mvg_img_path]['success'] = self.success
-            cache_file = open(cache_path, "w")
-            json.dump(cache, cache_file)
+            cache_file = open(cache_path, "a+")
+            cache_file.write("\n")
+            cache_file.write("{}\t{}".format(key, val))
             cache_file.close()
 
     def calculate_score(self, a_x, a_y, a_angle, a_scale, b_x, b_y, b_angle, b_scale):

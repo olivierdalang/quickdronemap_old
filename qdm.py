@@ -80,7 +80,10 @@ class DroneMap():
             self.xform = QgsCoordinateTransform(self.crs_src, self.crs_dest, QgsProject.instance())
         return self.xform.transform(QgsPointXY(lon, lat))
 
-    def process(self):
+    def process(self, step_guess_orientation=True, step_advanced_alignement=True,
+                      step_gen_worldfiles=True, step_load_worldfiles=True,
+                      step_gen_vrts=True, step_load_vrts=True,
+                      step_load_debug=True ):
         """
         Main process that go through all images and sets their transformation parameters
         """
@@ -92,7 +95,7 @@ class DroneMap():
                     image_path = os.path.join(root, file)
                     image = Image(self, image_path)
                     self.images.append(image)
-        self.images = self.images[60:80]
+        self.images = self.images[70:90]
         # for i in [301,300,329]: # 3 images, transform fails on all of them
         # for i in [397,398,364]: # 3 images, transform fails on one of them
         # for i in [377,380,381]: # 3 images, transform works on all of them
@@ -108,176 +111,180 @@ class DroneMap():
         for image in self.images:
             image.set_attributes()
 
-        QgsMessageLog.logMessage("3/ Building image sequences...", "QuickDroneMap", 0)
-        sorted_images = sorted(self.images, key=lambda x: x.timestamp)
-        for i in range(len(sorted_images)):
+        if step_guess_orientation:
+            QgsMessageLog.logMessage("3/ Building image sequences...", "QuickDroneMap", 0)
+            sorted_images = sorted(self.images, key=lambda x: x.timestamp)
+            for i in range(len(sorted_images)):
 
-            prev_image = sorted_images[i-1] if i>0 else None
-            image = sorted_images[i]
-            next_image = sorted_images[i+1] if i<len(sorted_images)-1 else None
+                prev_image = sorted_images[i-1] if i>0 else None
+                image = sorted_images[i]
+                next_image = sorted_images[i+1] if i<len(sorted_images)-1 else None
 
-            if prev_image is None or next_image is None:
-                continue
+                if prev_image is None or next_image is None:
+                    continue
 
-            angle_p_i = math.atan2(image.point.x()-prev_image.point.x(),-image.point.y()+prev_image.point.y())
-            angle_i_n = math.atan2(next_image.point.x()-image.point.x(),-next_image.point.y()+image.point.y())
+                angle_p_i = math.atan2(image.point.x()-prev_image.point.x(),-image.point.y()+prev_image.point.y())
+                angle_i_n = math.atan2(next_image.point.x()-image.point.x(),-next_image.point.y()+image.point.y())
 
-            # Checking if the three images are aligned (if not, we're probably at an angle)
-            dA = absolute_angle_difference(angle_p_i, angle_i_n)
-            if dA > ANGLE_THRESHOLD:
-                continue
+                # Checking if the three images are aligned (if not, we're probably at an angle)
+                dA = absolute_angle_difference(angle_p_i, angle_i_n)
+                if dA > ANGLE_THRESHOLD:
+                    continue
 
-            # Checking if the three images are near enough timewise, if not, it could be separate flights
-            dT1 = image.timestamp - prev_image.timestamp
-            dT2 = next_image.timestamp - image.timestamp
-            if dT1 > TIME_THRESHOLD or dT2 > TIME_THRESHOLD:
-                continue
+                # Checking if the three images are near enough timewise, if not, it could be separate flights
+                dT1 = image.timestamp - prev_image.timestamp
+                dT2 = next_image.timestamp - image.timestamp
+                if dT1 > TIME_THRESHOLD or dT2 > TIME_THRESHOLD:
+                    continue
 
-            prev_image.next_image = image
-            image.prev_image = prev_image
-            image.next_image = next_image
-            next_image.prev_image = image
+                prev_image.next_image = image
+                image.prev_image = prev_image
+                image.next_image = next_image
+                next_image.prev_image = image
 
-        QgsMessageLog.logMessage("4/ Deriving orientation from image sequence", "QuickDroneMap", 0)
-        for image in self.images:
-            # if the direction wasn't set in the Exif tags, we derive it from the image sequences
-            if image.angle is None:
-                img_a = image.prev_image or image 
-                img_b = image.next_image or image 
-                # TODO : reenable this
-                # image.angle = math.atan2(img_b.point.x()-img_a.point.x(),-img_b.point.y()+img_a.point.y())
-                image.angle = 0.0
+            QgsMessageLog.logMessage("4/ Deriving orientation from image sequence", "QuickDroneMap", 0)
+            for image in self.images:
+                # if the direction wasn't set in the Exif tags, we derive it from the image sequences
+                if image.direction is None:
+                    img_a = image.prev_image or image 
+                    img_b = image.next_image or image
+                    image.angle = math.atan2(img_b.point.x()-img_a.point.x(),-img_b.point.y()+img_a.point.y())
 
-        QgsMessageLog.logMessage("5/ Building image neighbourhood graph...", "QuickDroneMap", 0)
-        from scipy.spatial import Delaunay
-        points = [(i.point.x(),i.point.y()) for i in self.images]
-        triangulation = Delaunay(points)
+        if step_advanced_alignement:
+            QgsMessageLog.logMessage("5/ Building image neighbourhood graph...", "QuickDroneMap", 0)
+            from scipy.spatial import Delaunay
+            points = [(i.point.x(),i.point.y()) for i in self.images]
+            triangulation = Delaunay(points)
 
-        done = [[False for _i2 in self.images] for _i1 in self.images]
-        for tri in triangulation.simplices:
-            i1,i2,i3 = tri
-            if not done[i1][i2]:
-                e = Edge(self.images[i1], self.images[i2])
-                self.edges.append(e)
-                self.images[i1].edges.append(e)
-                self.images[i2].edges.append(e)
-                done[i1][i2] = True
-            if not done[i1][i3]:
-                e = Edge(self.images[i1], self.images[i3])
-                self.edges.append(e)
-                self.images[i1].edges.append(e)
-                self.images[i3].edges.append(e)
-                done[i1][i3] = True
-            if not done[i2][i3]:
-                e = Edge(self.images[i2], self.images[i3])
-                self.edges.append(e)
-                self.images[i2].edges.append(e)
-                self.images[i3].edges.append(e)
-                done[i2][i3] = True
+            done = [[False for _i2 in self.images] for _i1 in self.images]
+            for tri in triangulation.simplices:
+                i1,i2,i3 = tri
+                if not done[i1][i2]:
+                    e = Edge(self.images[i1], self.images[i2])
+                    self.edges.append(e)
+                    self.images[i1].edges.append(e)
+                    self.images[i2].edges.append(e)
+                    done[i1][i2] = True
+                if not done[i1][i3]:
+                    e = Edge(self.images[i1], self.images[i3])
+                    self.edges.append(e)
+                    self.images[i1].edges.append(e)
+                    self.images[i3].edges.append(e)
+                    done[i1][i3] = True
+                if not done[i2][i3]:
+                    e = Edge(self.images[i2], self.images[i3])
+                    self.edges.append(e)
+                    self.images[i2].edges.append(e)
+                    self.images[i3].edges.append(e)
+                    done[i2][i3] = True
 
-        QgsMessageLog.logMessage("6/ Computing similarities", "QuickDroneMap", 0)
-        for i, edge in enumerate(self.edges):
-            QgsMessageLog.logMessage("Done {} out of {}".format(i,len(self.edges)), "QuickDroneMap", 0)
+            QgsMessageLog.logMessage("6/ Computing similarities", "QuickDroneMap", 0)
+            for i, edge in enumerate(self.edges):
+                QgsMessageLog.logMessage("Done {} out of {}".format(i,len(self.edges)), "QuickDroneMap", 0)
+                QApplication.processEvents()
+                edge.compute_transform()
+
+            # initial_guess_np, _ = self.get_initial_values_and_bounds()
+            # QgsMessageLog.logMessage("Initial fitness is {}".format(self.calculate_fitness(initial_guess_np)), "QuickDroneMap", 0)
+
+            # print("TESTING QUALITY OF SIMILARITY (disable optimization to do this)")
+            # done = []
+            # edges_to_delete = []
+            # for edge in self.edges:
+            #         QApplication.processEvents()
+
+            #     if edge.imageA in done or edge.imageB in done:
+            #         edges_to_delete.append(edge)
+            #         continue
+
+            #     done.append(edge.imageA)
+            #     done.append(edge.imageB)
+
+            #     d_angle = edge.angle
+            #     edge.imageB.angle = edge.imageA.angle + d_angle
+
+            #     f_scale = edge.scale
+            #     edge.imageB.scale = edge.imageA.scale * f_scale
+
+            #     d_point = QgsPointXY(edge.tvec[0],edge.tvec[1])
+            #     d_point = d_point.rotated(edge.imageA.angle)
+            #     d_point *= edge.imageA.pixel_size/DOWNSCALING_FACTOR
+            #     edge.imageB.point = edge.imageA.point + d_point
+            # for edge in edges_to_delete:
+            #     self.edges.remove(edge)
+
+
+            # print("AFTER PROTOTYPE PLACEMENT")
+            # initial_guess_np, _ = self.get_initial_values_and_bounds()
+            # self.calculate_fitness(initial_guess_np)
+
+
+            QgsMessageLog.logMessage("7/ Optimizing", "QuickDroneMap", 0)
             QApplication.processEvents()
-            edge.compute_transform()
 
-        initial_guess_np, _ = self.get_initial_values_and_bounds()
-        QgsMessageLog.logMessage("Initial fitness is {}".format(self.calculate_fitness(initial_guess_np)), "QuickDroneMap", 0)
+            initial_guess_np, bounds = self.get_initial_values_and_bounds()        
+            # res_1 = least_squares(calculate_fitness, initial_guess_np, bounds=([b[0] for b in bounds],[b[1] for b in bounds]))
+            res_1 = minimize(self.calculate_fitness, initial_guess_np, bounds=bounds)
 
-        # print("TESTING QUALITY OF SIMILARITY (disable optimization to do this)")
-        # done = []
-        # edges_to_delete = []
-        # for edge in self.edges:
-        #         QApplication.processEvents()
+            for image in self.images:
+                px = res_1.x[image.id*4+0]
+                py = res_1.x[image.id*4+1]
+                pa = res_1.x[image.id*4+2]
+                ps = res_1.x[image.id*4+3]
+                image.point = QgsPointXY(px, py)
+                image.angle = pa
+                image.psize = ps
 
-        #     if edge.imageA in done or edge.imageB in done:
-        #         edges_to_delete.append(edge)
-        #         continue
-
-        #     done.append(edge.imageA)
-        #     done.append(edge.imageB)
-
-        #     d_angle = edge.angle
-        #     edge.imageB.angle = edge.imageA.angle + d_angle
-
-        #     f_scale = edge.scale
-        #     edge.imageB.scale = edge.imageA.scale * f_scale
-
-        #     d_point = QgsPointXY(edge.tvec[0],edge.tvec[1])
-        #     d_point = d_point.rotated(edge.imageA.angle)
-        #     d_point *= edge.imageA.pixel_size/DOWNSCALING_FACTOR
-        #     edge.imageB.point = edge.imageA.point + d_point
-        # for edge in edges_to_delete:
-        #     self.edges.remove(edge)
-
-
-        # print("AFTER PROTOTYPE PLACEMENT")
-        # initial_guess_np, _ = self.get_initial_values_and_bounds()
-        # self.calculate_fitness(initial_guess_np)
-
-
-        QgsMessageLog.logMessage("7/ Optimizing", "QuickDroneMap", 0)
-        initial_guess_np, bounds = self.get_initial_values_and_bounds()
-        QApplication.processEvents()
-    
-        # res_1 = least_squares(calculate_fitness, initial_guess_np, bounds=([b[0] for b in bounds],[b[1] for b in bounds]))
-        res_1 = minimize(self.calculate_fitness, initial_guess_np, bounds=bounds)
-
-        for image in self.images:
-            px = res_1.x[image.id*4+0]
-            py = res_1.x[image.id*4+1]
-            pa = res_1.x[image.id*4+2]
-            ps = res_1.x[image.id*4+3]
-            image.point = QgsPointXY(px, py)
-            image.angle = pa
-            image.psize = ps
-
-        initial_guess_np, _ = self.get_initial_values_and_bounds()
-        QgsMessageLog.logMessage("After optimization fitness is {}".format(self.calculate_fitness(initial_guess_np)), "QuickDroneMap", 0)
+            initial_guess_np, _ = self.get_initial_values_and_bounds()
+            QgsMessageLog.logMessage("After optimization fitness is {}".format(self.calculate_fitness(initial_guess_np)), "QuickDroneMap", 0)
         
         QgsMessageLog.logMessage("8/ Computing all transforms...", "QuickDroneMap", 0)
         for image in self.images:
             image.update_transform()
 
+        if step_gen_worldfiles:
+            QgsMessageLog.logMessage("9a/ Creating and loading worldfiles", "QuickDroneMap", 0)
+            for image in self.images:
+                image.write_worldfile()
+                if step_load_worldfiles:
+                    image.load_worldfile(self.iface)
+
+        if step_gen_vrts:
+            QgsMessageLog.logMessage("9b/ Creating and loading vrts", "QuickDroneMap", 0)
+            for image in self.images:
+                image.write_vrt()
+                if step_load_vrts:
+                    image.load_vrt(self.iface)
+
+        if step_load_debug:
+            QgsMessageLog.logMessage("10/ Creating debug jsons files", "QuickDroneMap", 0)
+            edg_data = {"type": "FeatureCollection","features": [], "crs": {"type": "EPSG","properties": {"code": 32628}}} # TODO : use self.crs
+            for edge in self.edges:
+                coords = [[edge.imageA.point.x(), edge.imageA.point.y()],[edge.imageB.point.x(), edge.imageB.point.y()]]
+                props = {k:v for (k,v) in vars(edge).items()}
+                props['angle_a'] = edge.imageA.angle
+                props['angle_b'] = edge.imageB.angle
+                feature = {"type": "Feature","properties": props,"geometry": {"type": "LineString","coordinates": coords}}
+                edg_data['features'].append(feature)
             
-        QgsMessageLog.logMessage("9a/ Creating and loading worldfiles", "QuickDroneMap", 0)
-        for image in self.images:
-            image.write_worldfile()
-            image.load_worldfile(self.iface)
+            edg_file = tempfile.NamedTemporaryFile(mode='w+', suffix='.geojson', delete=False)
+            json.dump(edg_data, edg_file, default=lambda o: str(o))
+            edg_file.close()
+            layer = self.iface.addVectorLayer(edg_file.name,"[DEBUG] Edges","ogr")
+            layer.loadNamedStyle(os.path.join(os.path.dirname(os.path.realpath(__file__)),'debug_edges_style.qml'))
+            
+            graph_data = {"type": "FeatureCollection","features": [], "crs": {"type": "EPSG","properties": {"code": 4326}}} # TODO : use self.crs
+            for edge in self.edges:
+                coords = [[edge.imageA.lon, edge.imageA.lat],[edge.imageB.lon, edge.imageB.lat]]
+                props = {k:v for (k,v) in vars(edge).items()}
+                feature = {"type": "Feature","properties": props,"geometry": {"type": "LineString","coordinates": coords}}
+                graph_data['features'].append(feature)
 
-        QgsMessageLog.logMessage("9b/ Creating and loading vrts", "QuickDroneMap", 0)
-        for image in self.images:
-            image.write_vrt()
-            image.load_vrt(self.iface)
-
-        QgsMessageLog.logMessage("10/ Creating debug jsons files", "QuickDroneMap", 0)
-        edg_data = {"type": "FeatureCollection","features": [], "crs": {"type": "EPSG","properties": {"code": 32628}}} # TODO : use self.crs
-        for edge in self.edges:
-            coords = [[edge.imageA.point.x(), edge.imageA.point.y()],[edge.imageB.point.x(), edge.imageB.point.y()]]
-            props = {k:v for (k,v) in vars(edge).items()}
-            props['angle_a'] = edge.imageA.angle
-            props['angle_b'] = edge.imageB.angle
-            feature = {"type": "Feature","properties": props,"geometry": {"type": "LineString","coordinates": coords}}
-            edg_data['features'].append(feature)
-        
-        edg_file = tempfile.NamedTemporaryFile(mode='w+', suffix='.geojson', delete=False)
-        json.dump(edg_data, edg_file, default=lambda o: str(o))
-        edg_file.close()
-        layer = self.iface.addVectorLayer(edg_file.name,"[DEBUG] Edges","ogr")
-        layer.loadNamedStyle(os.path.join(os.path.dirname(os.path.realpath(__file__)),'debug_edges_style.qml'))
-        
-        graph_data = {"type": "FeatureCollection","features": [], "crs": {"type": "EPSG","properties": {"code": 4326}}} # TODO : use self.crs
-        for edge in self.edges:
-            coords = [[edge.imageA.lon, edge.imageA.lat],[edge.imageB.lon, edge.imageB.lat]]
-            props = {k:v for (k,v) in vars(edge).items()}
-            feature = {"type": "Feature","properties": props,"geometry": {"type": "LineString","coordinates": coords}}
-            graph_data['features'].append(feature)
-
-        graph_file = tempfile.NamedTemporaryFile(mode='w+', suffix='.geojson', delete=False)
-        json.dump(graph_data, graph_file, default=lambda o: str(o))
-        graph_file.close()
-        layer = self.iface.addVectorLayer(graph_file.name,"[DEBUG] Graph","ogr")
-        layer.loadNamedStyle(os.path.join(os.path.dirname(os.path.realpath(__file__)),'debug_graph_style.qml'))
+            graph_file = tempfile.NamedTemporaryFile(mode='w+', suffix='.geojson', delete=False)
+            json.dump(graph_data, graph_file, default=lambda o: str(o))
+            graph_file.close()
+            layer = self.iface.addVectorLayer(graph_file.name,"[DEBUG] Graph","ogr")
+            layer.loadNamedStyle(os.path.join(os.path.dirname(os.path.realpath(__file__)),'debug_graph_style.qml'))
 
 
     def get_initial_values_and_bounds(self):
@@ -425,7 +432,7 @@ class Image():
         self.pixel_size = (self.altitude * 35.0 / self.focal) / float(self.width)
         # transform attributes
         self.point = self.drone_map.reproject(lon,lat)
-        self.angle = float(gps_direction) if gps_direction is not None else None
+        self.angle = float(gps_direction) if gps_direction is not None else 0
         self.scale = 1.0
 
     def update_transform(self):

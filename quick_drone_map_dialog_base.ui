@@ -13,10 +13,31 @@
   <property name="windowTitle">
    <string>Quick Drone Map</string>
   </property>
-  <layout class="QFormLayout" name="formLayout">
-   <property name="fieldGrowthPolicy">
-    <enum>QFormLayout::AllNonFixedFieldsGrow</enum>
-   </property>
+  <layout class="QGridLayout" name="gridLayout">
+   <item row="2" column="2">
+    <widget class="QLabel" name="label_5">
+     <property name="text">
+      <string>Load VRTs</string>
+     </property>
+    </widget>
+   </item>
+   <item row="2" column="3">
+    <widget class="QCheckBox" name="loadVRTCheckBox">
+     <property name="text">
+      <string/>
+     </property>
+     <property name="checked">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item row="0" column="1" colspan="3">
+    <widget class="QLineEdit" name="pathLineEdit">
+     <property name="text">
+      <string>C:\Users\Olivier\Dropbox\Affaires\SPC\Sources\quickdronemap\test\data</string>
+     </property>
+    </widget>
+   </item>
    <item row="0" column="0">
     <widget class="QLabel" name="label">
      <property name="text">
@@ -24,48 +45,39 @@
      </property>
     </widget>
    </item>
-   <item row="0" column="1">
-    <widget class="QLineEdit" name="pathLineEdit">
+   <item row="3" column="2">
+    <widget class="QLabel" name="label_4">
      <property name="text">
-      <string>C:\Users\Olivier\Dropbox\Affaires\SPC\Sources\quickdronemap\test\data</string>
+      <string>Load worldfiles</string>
      </property>
     </widget>
    </item>
    <item row="2" column="0">
+    <widget class="QLabel" name="label_3">
+     <property name="text">
+      <string>Generate VRTs</string>
+     </property>
+    </widget>
+   </item>
+   <item row="4" column="1">
+    <widget class="QCheckBox" name="orientationCheckBox">
+     <property name="text">
+      <string/>
+     </property>
+     <property name="checked">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item row="3" column="0">
     <widget class="QLabel" name="label_6">
      <property name="text">
-      <string>Load results as</string>
+      <string>Generate worldfiles</string>
      </property>
     </widget>
    </item>
    <item row="2" column="1">
-    <widget class="QComboBox" name="comboBox">
-     <item>
-      <property name="text">
-       <string>Original image through virtual raster</string>
-      </property>
-     </item>
-     <item>
-      <property name="text">
-       <string>Original image with worldfiles</string>
-      </property>
-     </item>
-     <item>
-      <property name="text">
-       <string>Do not load</string>
-      </property>
-     </item>
-    </widget>
-   </item>
-   <item row="3" column="0">
-    <widget class="QLabel" name="label_7">
-     <property name="text">
-      <string>Guess orientation</string>
-     </property>
-    </widget>
-   </item>
-   <item row="3" column="1">
-    <widget class="QCheckBox" name="checkBox_3">
+    <widget class="QCheckBox" name="genVRTCheckBox">
      <property name="text">
       <string/>
      </property>
@@ -75,31 +87,14 @@
     </widget>
    </item>
    <item row="4" column="0">
-    <widget class="QLabel" name="label_8">
+    <widget class="QLabel" name="label_7">
      <property name="text">
-      <string>Advanced alignement</string>
+      <string>Guess orientation</string>
      </property>
     </widget>
    </item>
-   <item row="4" column="1">
-    <widget class="QCheckBox" name="checkBox_4">
-     <property name="text">
-      <string/>
-     </property>
-     <property name="checked">
-      <bool>true</bool>
-     </property>
-    </widget>
-   </item>
-   <item row="5" column="0">
-    <widget class="QLabel" name="label_2">
-     <property name="text">
-      <string>Load debug layers</string>
-     </property>
-    </widget>
-   </item>
-   <item row="5" column="1">
-    <widget class="QCheckBox" name="checkBox">
+   <item row="3" column="1">
+    <widget class="QCheckBox" name="genWorldfileCheckBox">
      <property name="text">
       <string/>
      </property>
@@ -108,7 +103,7 @@
      </property>
     </widget>
    </item>
-   <item row="6" column="0" colspan="2">
+   <item row="8" column="0" colspan="4">
     <spacer name="verticalSpacer_2">
      <property name="orientation">
       <enum>Qt::Vertical</enum>
@@ -121,13 +116,54 @@
      </property>
     </spacer>
    </item>
-   <item row="7" column="0" colspan="2">
+   <item row="3" column="3">
+    <widget class="QCheckBox" name="loadWorldFileCheckBox">
+     <property name="text">
+      <string/>
+     </property>
+    </widget>
+   </item>
+   <item row="9" column="0" colspan="2">
     <widget class="QDialogButtonBox" name="button_box">
      <property name="orientation">
       <enum>Qt::Horizontal</enum>
      </property>
      <property name="standardButtons">
       <set>QDialogButtonBox::Cancel|QDialogButtonBox::Ok</set>
+     </property>
+    </widget>
+   </item>
+   <item row="5" column="0">
+    <widget class="QLabel" name="label_8">
+     <property name="text">
+      <string>Advanced alignement</string>
+     </property>
+    </widget>
+   </item>
+   <item row="5" column="1">
+    <widget class="QCheckBox" name="advancedAlignementCheckBox">
+     <property name="text">
+      <string/>
+     </property>
+     <property name="checked">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item row="5" column="2">
+    <widget class="QLabel" name="label_2">
+     <property name="text">
+      <string>Load debug layers</string>
+     </property>
+    </widget>
+   </item>
+   <item row="5" column="3">
+    <widget class="QCheckBox" name="loadDebugCheckBox">
+     <property name="text">
+      <string/>
+     </property>
+     <property name="checked">
+      <bool>true</bool>
      </property>
     </widget>
    </item>

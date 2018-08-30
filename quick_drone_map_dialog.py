@@ -10,3 +10,7 @@ class QuickDroneMapDialog(QtWidgets.QDialog):
         super().__init__(parent)
 
         uic.loadUi(UI_FILE_PATH, self)
+
+        self.genVRTCheckBox.stateChanged.connect(self.loadVRTCheckBox.setEnabled)
+        self.genWorldfileCheckBox.stateChanged.connect(self.loadWorldFileCheckBox.setEnabled)
+        self.advancedAlignementCheckBox.stateChanged.connect(self.loadDebugCheckBox.setEnabled)

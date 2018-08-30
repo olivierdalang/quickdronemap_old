@@ -56,4 +56,12 @@ class QuickDroneMap:
         
         if result:
             drone_map = DroneMap(self.iface, self.dlg.pathLineEdit.text())
-            drone_map.process()
+            drone_map.process(
+                step_guess_orientation=self.dlg.orientationCheckBox.isChecked(),
+                step_advanced_alignement=self.dlg.advancedAlignementCheckBox.isChecked(),
+                step_gen_worldfiles=self.dlg.genWorldfileCheckBox.isChecked(),
+                step_load_worldfiles=self.dlg.loadWorldFileCheckBox.isChecked(),
+                step_gen_vrts=self.dlg.genVRTCheckBox.isChecked(),
+                step_load_vrts=self.dlg.loadVRTCheckBox.isChecked(),
+                step_load_debug=self.dlg.loadDebugCheckBox.isChecked(),
+            )
